@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Piano Fingering Tool</title>
+  <style>
+    body { font-family: sans-serif; max-width: 760px; padding: 1.5rem; margin: auto; }
+    h1 { border-bottom: 2px solid #eee; padding-bottom: 10px; }
+    .step { background-color: #f9f9f9; border: 1px solid #ddd; padding: 20px; border-radius: 5px; }
+    #log { white-space: pre-wrap; border: 1px solid #ccc; padding: .8rem; margin-top: 1rem; max-height: 200px; overflow-y: auto; }
+    #download-link { display: none; margin-top: 15px; padding: 10px 15px; background-color: #28a745; color: white; text-decoration: none; border-radius: 5px; }
+    label { cursor: pointer; display: inline-block; padding: 8px 12px; background-color: #007bff; color: white; border-radius: 4px; }
+    label:hover { background-color: #0056b3; }
+    input[type="file"] { display: none; }
+    input[type="text"] { width: 60px; margin-left: 5px; }
+  </style>
+</head>
+<body>
+
+  <h1>Piano Fingering Tool</h1>
+
+  <div class="step">
+    <h2>Generate Fingered MIDI</h2>
+    <div>
+      <label for="midi-file">Choose MIDI File</label>
+      <input type="file" id="midi-file" accept=".mid,.midi">
+      
+      <label for="handSize" style="margin-left: 20px; background-color: #6c757d;">
+        Hand Size:
+        <input type="text" id="handSize" value="XL">
+      </label>
+    </div>
+    <a id="download-link" download="fingered_song.mid">Download Fingered MIDI</a>
+  </div>
+
+  <pre id="log">Waiting for a MIDI file...</pre>
+
+  <script type="module">
+    const log = (t) => { logBox.textContent += t + "\n"; logBox.scrollTop = logBox.scrollHeight; };
+    const $ = (id) => document.getElementById(id);
+
+    const logBox = $("log");
+    const worker = new Worker("pp-worker.js");
+
+    $("midi-file").addEventListener("change", async (ev) => {
+      const f = ev.target.files[0];
+      if (!f) return;
+      $("download-link").style.display = "none";
+      logBox.textContent = "";
+      log(`Sending ${f.name} to fingering engine...`);
+      const buf = await f.arrayBuffer();
+      worker.postMessage({ midiArrayBuffer: buf, handSize: $("handSize").value }, [buf]);
+    });
+
+    worker.onmessage = ({ data }) => {
+      // data is the base64 string of the new MIDI file
+      log(`✔ Fingered MIDI created successfully!`);
+      
+      const byteString = atob(data);
+      const byteNumbers = new Array(byteString.length);
+      for (let i = 0; i < byteString.length; i++) {
+        byteNumbers[i] = byteString.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: 'audio/midi' });
+
+      $("download-link").href = URL.createObjectURL(blob);
+      $("download-link").style.display = "inline-block";
+    };
+
+    worker.onerror = (e) => {
+      console.error("Worker error event:", e);
+      log(`Worker crashed. Open DevTools (F12) ► Console for details.`);
+    };
+  </script>
+</body>
+</html>
