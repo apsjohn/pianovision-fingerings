@@ -4,11 +4,11 @@
   <meta charset="utf-8" />
   <title>Piano Fingering Tool</title>
   <style>
-    body { font-family: sans-serif; max-width: 760px; padding: 1.5rem; margin: auto; }
-    h1 { border-bottom: 2px solid #eee; padding-bottom: 10px; }
-    .step { background-color: #f9f9f9; border: 1px solid #ddd; padding: 20px; border-radius: 5px; }
+    body { font-family: sans-serif; max-width: 800px; padding: 1.5rem; margin: auto; }
+    h1, h2 { border-bottom: 2px solid #eee; padding-bottom: 10px; }
+    .step { background-color: #f9f9f9; border: 1px solid #ddd; padding: 15px; margin-bottom: 20px; border-radius: 5px; }
     #log { white-space: pre-wrap; border: 1px solid #ccc; padding: .8rem; margin-top: 1rem; max-height: 200px; overflow-y: auto; }
-    #download-link { display: none; margin-top: 15px; padding: 10px 15px; background-color: #28a745; color: white; text-decoration: none; border-radius: 5px; }
+    #download-map, #merge-button, #final-download { display: none; margin-top: 10px; }
     label { cursor: pointer; display: inline-block; padding: 8px 12px; background-color: #007bff; color: white; border-radius: 4px; }
     label:hover { background-color: #0056b3; }
     input[type="file"] { display: none; }
@@ -19,8 +19,9 @@
 
   <h1>Piano Fingering Tool</h1>
 
+  <!-- STEP 1: Generate Fingering Map -->
   <div class="step">
-    <h2>Generate Fingered MIDI</h2>
+    <h2>Step 1: Generate Fingering Map from MIDI</h2>
     <div>
       <label for="midi-file">Choose MIDI File</label>
       <input type="file" id="midi-file" accept=".mid,.midi">
@@ -30,48 +31,155 @@
         <input type="text" id="handSize" value="XL">
       </label>
     </div>
-    <a id="download-link" download="fingered_song.mid">Download Fingered MIDI</a>
+    <a id="download-map" class="button" download="fingering_map.json">Download Fingering Map</a>
   </div>
 
-  <pre id="log">Waiting for a MIDI file...</pre>
+  <!-- STEP 2: Merge Files -->
+  <div class="step">
+    <h2>Step 2: Merge with PianoVision JSON</h2>
+    <div>
+      <label for="pv-file">Upload PianoVision JSON</label>
+      <input type="file" id="pv-file" accept=".json">
+      <span id="pv-file-name"></span>
+    </div>
+    <div style="margin-top: 10px;">
+      <label for="map-file">Upload Fingering Map JSON</label>
+      <input type="file" id="map-file" accept=".json">
+      <span id="map-file-name"></span>
+    </div>
+    <button id="merge-button">Merge Files</button>
+    <a id="final-download" class="button" download="final_fingered_song.json">Download Final Fingered JSON</a>
+  </div>
 
-  <script type="module">
-    const log = (t) => { logBox.textContent += t + "\n"; logBox.scrollTop = logBox.scrollHeight; };
-    const $ = (id) => document.getElementById(id);
+  <pre id="log">Waiting for actions...</pre>
 
-    const logBox = $("log");
-    const worker = new Worker("pp-worker.js");
+<script type="module">
+  const log = (t) => { logBox.textContent += t + "\n"; logBox.scrollTop = logBox.scrollHeight; };
+  const $ = (id) => document.getElementById(id);
 
-    $("midi-file").addEventListener("change", async (ev) => {
-      const f = ev.target.files[0];
-      if (!f) return;
-      $("download-link").style.display = "none";
-      logBox.textContent = "";
-      log(`Sending ${f.name} to fingering engine...`);
-      const buf = await f.arrayBuffer();
-      worker.postMessage({ midiArrayBuffer: buf, handSize: $("handSize").value }, [buf]);
-    });
+  const logBox = $("log");
+  const worker = new Worker("pp-worker.js");
 
-    worker.onmessage = ({ data }) => {
-      // data is the base64 string of the new MIDI file
-      log(`✔ Fingered MIDI created successfully!`);
-      
-      const byteString = atob(data);
-      const byteNumbers = new Array(byteString.length);
-      for (let i = 0; i < byteString.length; i++) {
-        byteNumbers[i] = byteString.charCodeAt(i);
+  // --- Logic for Step 1 ---
+  $("midi-file").addEventListener("change", async (ev) => {
+    const f = ev.target.files[0];
+    if (!f) return;
+    $("download-map").style.display = "none";
+    logBox.textContent = "";
+    log(`Sending ${f.name} to fingering engine...`);
+
+    const buf = await f.arrayBuffer();
+    worker.postMessage({ midiArrayBuffer: buf, handSize: $("handSize").value }, [buf]);
+  });
+
+// In index.html
+  worker.onmessage = ({ data }) => {
+    // ADD THIS LINE TO DEBUG
+    console.log("Main page received this data:", data);
+
+    const jsonStr = data; // This is the fingering map string
+    log(`✔ Fingering map created – ${jsonStr.length.toLocaleString()} bytes`);
+    
+    const blob = new Blob([jsonStr], { type: "application/json" });
+    $("download-map").href = URL.createObjectURL(blob);
+    $("download-map").style.display = "inline-block";
+  };
+
+  worker.onerror = (e) => {
+    console.error("Worker error event:", e);
+    log(`Worker crashed. Open DevTools (F12) ► Console for details.`);
+  };
+
+  // --- Logic for Step 2 ---
+  let pvJson = null;
+  let mapJson = null;
+
+  $("pv-file").addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    $("pv-file-name").textContent = ` loaded: ${file.name}`;
+    const reader = new FileReader();
+    reader.onload = (event) => { pvJson = JSON.parse(event.target.result); checkMergeReady(); };
+    reader.readAsText(file);
+  });
+
+  $("map-file").addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    $("map-file-name").textContent = ` loaded: ${file.name}`;
+    const reader = new FileReader();
+    reader.onload = (event) => { 
+        mapJson = JSON.parse(event.target.result); 
+        
+        // ADD THIS LINE TO DEBUG
+        console.log("Parsed mapJson object:", mapJson);
+
+        checkMergeReady(); 
+    };
+    reader.readAsText(file);
+  });
+
+  function checkMergeReady() {
+    if (pvJson && mapJson) {
+      $("merge-button").style.display = "inline-block";
+      log("Both files loaded. Ready to merge.");
+    }
+  }
+
+  // Replace the $("merge-button").addEventListener("click", ...) function in index.html
+
+// This is the correct, key-based merge logic for index.html
+
+$("merge-button").addEventListener("click", () => {
+    if (!pvJson || !mapJson) {
+      log("Error: Please load both files before merging.");
+      return;
+    }
+
+    log("Starting key-based merge process...");
+    let notesUpdated = 0;
+    let notesMissed = 0;
+    let loggedJsKeys = false;
+
+    console.log("--- JAVASCRIPT-GENERATED KEYS (RIGHT HAND) ---");
+
+    for (const hand of ['left', 'right']) {
+      if (pvJson.tracksV2 && pvJson.tracksV2[hand] && mapJson[hand]) {
+        pvJson.tracksV2[hand].forEach(block => {
+          if (block.notes) {
+            block.notes.forEach((note, index) => {
+              // Create the robust key from the PianoVision JSON
+              const key = `${note.ticksStart}:${note.midi}`;
+              
+              // --- DEBUGGING BLOCK ---
+              if (hand === 'right' && index < 5) {
+                console.log(`JavaScript Key: '${key}'`);
+              }
+              // --- END DEBUGGING ---
+
+              if (mapJson[hand][key] !== undefined) {
+                note.finger = mapJson[hand][key];
+                notesUpdated++;
+              } else {
+                notesMissed++;
+              }
+            });
+          }
+        });
       }
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: 'audio/midi' });
+    }
 
-      $("download-link").href = URL.createObjectURL(blob);
-      $("download-link").style.display = "inline-block";
-    };
+    log(`✔ Merge complete. ${notesUpdated} notes were updated with new fingerings.`);
+    if (notesMissed > 0) {
+      log(`Warning: ${notesMissed} notes could not be matched.`);
+    }
 
-    worker.onerror = (e) => {
-      console.error("Worker error event:", e);
-      log(`Worker crashed. Open DevTools (F12) ► Console for details.`);
-    };
-  </script>
+    const finalJsonStr = JSON.stringify(pvJson, null, 2);
+    const blob = new Blob([finalJsonStr], { type: "application/json" });
+    $("final-download").href = URL.createObjectURL(blob);
+    $("final-download").style.display = "inline-block";
+});
+
+</script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 /*  pp-worker.js
-    Pyodide 0.23.4 + pianoplayer -> Fingered MIDI
+    Pyodide 0.23.4  + pianoplayer →  PianoVision JSON
 */
 importScripts(
   "https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js"
@@ -22,30 +22,32 @@ for name in ('pretty_midi', 'vtk', 'vtkmodules'):
     sys.modules[name] = types.ModuleType(name)
 `);
 
-  /* -------- Defines the main Python function -------- */
+  /* -------- helper func that returns a JS dict -------- */
   await self.pyodide.runPythonAsync(`
-import base64
-import music21 as m21
-import importlib
-from io import BytesIO
-
+import base64, json, music21 as m21, importlib
 pf = importlib.import_module("pianoplayer.piano_fingering")
 
-def midi_to_fingered_midi(b64, hand_size="XL"):
-    # Decode the MIDI data and parse it
-    midi_bytes = base64.b64decode(b64)
-    score = m21.converter.parseData(midi_bytes)
+def finger_to_map(b64, hand_size="XL"):
+    sc = m21.converter.parseData(base64.b64decode(b64))
+    left_inotes, right_inotes = pf.compute_all(sc, hand_size)
 
-    # Call our helper to add fingerings to the score object
-    annotated_score = pf.compute_and_annotate(score, hand_size)
+    # --- DEBUGGING BLOCK ---
+    print("--- PYTHON-GENERATED KEYS (RIGHT HAND) ---")
+    for n in right_inotes[:5]: # Print first 5 keys
+        # Use the integer n.ticks value for the key
+        key = f"{n.ticks}:{n.pitch}"
+        print(f"Python Key: '{key}'")
+    # --- END DEBUGGING ---
 
-    # Write the modified score to an in-memory MIDI file
-    fp = BytesIO()
-    annotated_score.write('midi', fp=fp)
-    fp.seek(0)
-    
-    # Return the new MIDI file's bytes as a base64 string
-    return base64.b64encode(fp.read()).decode('utf-8')
+    fingering_map = {"left": {}, "right": {}}
+    for n in left_inotes:
+        key = f"{n.ticks}:{n.pitch}"
+        fingering_map["left"][key] = 6 - n.fingering if n.fingering else 0
+    for n in right_inotes:
+        key = f"{n.ticks}:{n.pitch}"
+        fingering_map["right"][key] = n.fingering
+
+    return json.dumps(fingering_map, indent=2)
 `);
 })();   // pyReady ends
 
@@ -54,13 +56,12 @@ self.onmessage = async (evt) => {
   const { midiArrayBuffer, handSize = "L" } = evt.data;
   await pyReady;
 
+  // Convert MIDI bytes to base64 and call helper
   const b64 = btoa(
     String.fromCharCode(...new Uint8Array(midiArrayBuffer))
   );
-  
-  const fingeredMidiBase64 = await self.pyodide.runPythonAsync(
-    `midi_to_fingered_midi("""${b64}""", "${handSize}")`
+  const jsonStr = await self.pyodide.runPythonAsync(
+    `finger_to_map("""${b64}""", "${handSize}")`
   );
-  
-  postMessage(fingeredMidiBase64);
+  postMessage(jsonStr);
 };
